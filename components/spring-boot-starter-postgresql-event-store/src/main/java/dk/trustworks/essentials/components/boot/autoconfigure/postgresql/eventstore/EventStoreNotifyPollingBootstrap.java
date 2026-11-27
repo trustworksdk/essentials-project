@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypePersistenceStrategy;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.notify.EventStreamTableChangeNotification;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.notify.EventStreamTableNotificationDuplicationFilter;
 import dk.trustworks.essentials.components.foundation.postgresql.ListenNotify;
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
 import dk.trustworks.essentials.components.foundation.postgresql.TableChangeNotification;
@@ -41,7 +42,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *       whichever applier owns the event store's schema, under the framework's bootstrap lock,
  *       exactly like the table.</li>
  *   <li>Registration with the shared {@link MultiTableChangeListener} for
- *       {@link EventStreamTableChangeNotification}s.</li>
+ *       {@link EventStreamTableChangeNotification}s, collapsed to one per table per poll by an
+ *       {@link EventStreamTableNotificationDuplicationFilter}, so a burst of appends does not put one
+ *       event per append on the listener's shared {@code EventBus}.</li>
  * </ol>
  * Skipped (with a WARN) when the configured persistence strategy is not a
  * {@link SeparateTablePerAggregateTypePersistenceStrategy} — S1 is specific to the
@@ -75,8 +78,10 @@ public final class EventStoreNotifyPollingBootstrap {
             return;
         }
 
+        // One notification per event-stream table per poll reaches the listener's (shared) EventBus - see EventStreamTableNotificationDuplicationFilter
+        var eventStreamTables = EventStreamTableNotificationDuplicationFilter.registerWith(multiTableChangeListener);
         strategy.enableNotifyTriggers(tableName -> {
-            multiTableChangeListener.listenToNotificationsFor(tableName, EventStreamTableChangeNotification.class);
+            eventStreamTables.listenTo(tableName);
             log.info("Notify-polling: pg_notify trigger described and listener registered for table='{}'", tableName);
         });
 
