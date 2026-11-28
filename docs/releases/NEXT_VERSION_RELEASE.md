@@ -37,6 +37,8 @@ remove it, instead of keeping it because nobody can tell._
 - Interceptors: every interceptor family can replace what it passes on - queue, message-handler, command-bus and
   event-store interceptors share one contract (§2.19); handlers now receive replacements and `PatternMatchingMessageHandler`
   honours `@InterceptorOrder` (§1.1.7).
+- Classic durable queues: polls of a queue that holds no ordered message skip the ordered claim - half the claim
+  statements; an ordered message from another node can wait up to 1 s longer (§1.1, opt-out).
 
 There are no API removals. One schema change removes a redundant index on the event store's gap table (§1); another
 adds a `fence_token` column to the durable subscriptions table, which ends exclusive subscriptions' resume points
@@ -102,7 +104,23 @@ next save of each lock holder then stores its own token.
 
 ### 1.1 ⚠️ Silent behaviour changes
 
-None so far.
+- **Classic durable queues (`postgresql-queue`): a queue that holds no ordered message stops running the ordered
+  claim on every poll.** Each poll used to claim ordered messages first and unordered ones second; on a queue that
+  never receives an `OrderedMessage` the first statement always came back empty and cost one database round trip on
+  the poller's single thread. Now a check finds that the queue holds no ordered message outside its dead letter
+  queue, and polls leave that statement out until the next check, once a second. Measured with the
+  `SteadyStateClaimCostBenchmarkIT` and the new `OrderedClaimOnUnorderedQueuesBenchmarkIT` (three alternating rounds
+  each): claim statements per delivered message drop from 0.50 to 0.25 at 200 and 2 000 msg/s, all statements on ten
+  unordered queues at 100 msg/s drop by 37%, and delivery latency is unchanged against a local database. The saving
+  grows with the round-trip time to the database.
+
+  What can change for you: an ordered message that **another** node queues or resurrects - or that is inserted by
+  SQL - onto a queue that held no ordered message is noticed at the next check, so it can be delivered up to the
+  re-check interval (1 s) later than before. An ordered message this node queues, retries or resurrects is delivered
+  at once, and queues that hold ordered messages never skip. To restore the previous behaviour, set
+  `PostgresqlDurableQueuesBuilder.setOrderedClaimSkipRecheckInterval(Duration.ZERO)`, or in Spring Boot
+  `essentials.durable-queues.ordered-claim-skip-recheck-interval=0`. A shorter interval narrows the extra wait at
+  the cost of one cheap existence check per queue per interval.
 
 ---
 

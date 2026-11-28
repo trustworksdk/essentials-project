@@ -414,6 +414,24 @@ public class DurableQueuesSql {
     }
 
     /**
+     * SQL statement that tells whether a queue holds an ordered (keyed) message outside the dead letter queue - queued,
+     * waiting for a retry or being delivered. Served by {@code idx_<table>_ordered_msg}. See {@link OrderedClaimSkip}.
+     *
+     * @return SQL statement returning one boolean
+     */
+    public String getHasKeyedMessageOutsideDeadLetterQueueSql() {
+        return bind("""
+                    SELECT EXISTS (
+                      SELECT 1 FROM {:tableName}
+                      WHERE queue_name = :queueName
+                        AND key IS NOT NULL
+                        AND is_dead_letter_message = FALSE
+                    )
+                    """,
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
      * SQL statement for get total messages queued.
      *
      * @return SQL statement for get total messages queued

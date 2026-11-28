@@ -228,6 +228,10 @@ Investigate: retry with a 5 s delay on an idle queue, then measure how late the 
 
 Measure: `pg_stat_statements` calls and total time per statement at 0, 100 and 5 000 msg/s on 10 queues, before and after.
 
+**Ordered-claim skip: built** (`OrderedClaimSkip`, release notes §1.1, on by default with `setOrderedClaimSkipRecheckInterval(Duration.ZERO)` as the opt-out). A queue whose check finds no keyed message outside the dead letter queue leaves the ordered claim out of its polls. An after-commit hook on a local keyed enqueue, retry or resurrection ends the skip at once, and the table is checked again every second, which bounds the extra wait for an ordered message from another node (the table-change notification carries no key).
+
+Measured before and after, three alternating rounds from a clean worktree (`OrderedClaimOnUnorderedQueuesBenchmarkIT`, `SteadyStateClaimCostBenchmarkIT`): claim statements per message 0.50 → 0.25 at 200 and 2 000 msg/s; retry wave 990–1 002 → 489–507 claims, same time; ten unordered queues at 100 msg/s 13.0–13.1k → 8.2k statements (−37%), at 5 000 msg/s −11%; idle unchanged (the 1 s check replaces the claim at the 2 s backoff cap); latency unchanged against a local database. Before the change the ordered claim took 6–10 µs on the server and 80–180 µs on the client, so the saving is almost all round trip. Not yet measured: latency with network delay added. These numbers were taken on `release/0.61.1`.
+
 ## Workstream D — Handler transactions and connections
 
 ### Why this matters

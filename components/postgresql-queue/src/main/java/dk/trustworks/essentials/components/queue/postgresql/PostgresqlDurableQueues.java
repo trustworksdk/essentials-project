@@ -169,6 +169,14 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      */
     private volatile Boolean                             orderedClaimByHeadScanOverride;
     /**
+     * Per queue: whether polls may leave out the ordered claim - see {@link OrderedClaimSkip}
+     */
+    private final ConcurrentMap<QueueName, OrderedClaimSkip> orderedClaimSkips = new ConcurrentHashMap<>();
+    /**
+     * How often a queue whose polls skip the ordered claim checks the table again; zero or less never skips
+     */
+    private volatile long                                orderedClaimSkipRecheckIntervalNanos = DEFAULT_ORDERED_CLAIM_SKIP_RECHECK_INTERVAL.toNanos();
+    /**
      * Contains the timestamp of the last performed {@link #resetMessagesStuckBeingDelivered(QueueName)} check<br>
      */
     protected ConcurrentMap<QueueName, Instant>          lastResetStuckMessagesCheckTimestamps = new ConcurrentHashMap<>();
@@ -1168,7 +1176,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                    }
                                                    if (!messages.isEmpty()) {
                                                        unitOfWorkFactory.getRequiredUnitOfWork()
-                                                                        .registerLifecycleCallbackForResource(new LocallyQueuedMessage(queueName, queueEntryIds.getFirst(), messages.getFirst(), nextDeliveryTimestamp),
+                                                                        .registerLifecycleCallbackForResource(new LocallyQueuedMessage(queueName, queueEntryIds.getFirst(), messages.getFirst(), nextDeliveryTimestamp,
+                                                                                                                                        messages.stream().anyMatch(OrderedMessage.class::isInstance)),
                                                                                                               localEnqueueSignal);
                                                    }
 
@@ -1372,6 +1381,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                interceptors,
                                                (interceptors, interceptorChain) -> interceptors.intercept(operation, interceptorChain),
                                                () -> {
+                                                   // Before the operation's first statement - see OrderedClaimSkip
+                                                   var orderedClaimSkipEpoch = orderedClaimSkipEpoch(operation.queueName);
                                                    resetMessagesStuckBeingDelivered(operation.queueName);
                                                    Instant now = Instant.now();
                                                    Collection<String> excludes =
@@ -1380,7 +1391,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                            : List.of();
 
                                                    try {
-                                                       return fetchNextMessageReadyForDeliveryOrderedUnordered(operation.queueName, excludes, now);
+                                                       return fetchNextMessageReadyForDeliveryOrderedUnordered(operation.queueName, excludes, now, orderedClaimSkipEpoch);
                                                    } catch (DurableQueueDeserializationException e) {
                                                        log.error("[{}] Marking Message as DeadLetterMessage due to DurableQueueDeserializationException "
                                                                          + "while deserializing message with id '{}'",
@@ -1392,7 +1403,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                }).proceed();
     }
 
-    private Optional<QueuedMessage> fetchNextMessageReadyForDeliveryOrderedUnordered(QueueName queueName, Collection<String> excludes, Instant now) {
+    private Optional<QueuedMessage> fetchNextMessageReadyForDeliveryOrderedUnordered(QueueName queueName, Collection<String> excludes, Instant now, long orderedClaimSkipEpoch) {
         boolean hasExcludes = !excludes.isEmpty();
         var     byHeadScan  = orderedClaimByHeadScan(queueName);
         var     orderedSql  = byHeadScan ? durableQueuesSql.buildOrderedHeadScanSqlStatement(hasExcludes) : durableQueuesSql.buildOrderedSqlStatement(hasExcludes);
@@ -1400,18 +1411,22 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
         var handle = unitOfWorkFactory.getRequiredUnitOfWork().handle();
 
-        var orderedQuery = handle.createQuery(orderedSql)
-                                 .bind("queueName", queueName)
-                                 .bind("now", now)
-                                 .bind("limit", 1);
-        if (hasExcludes) orderedQuery.bindList("excludeKeys", excludes);
+        var pollNanos = System.nanoTime();
+        if (orderedClaimNeeded(handle, queueName, orderedClaimSkipEpoch, pollNanos)) {
+            var orderedQuery = handle.createQuery(orderedSql)
+                                     .bind("queueName", queueName)
+                                     .bind("now", now)
+                                     .bind("limit", 1);
+            if (hasExcludes) orderedQuery.bindList("excludeKeys", excludes);
 
-        Optional<QueuedMessage> queuedMessage = claimOrdered(handle, queueName, byHeadScan, 1,
-                                                             () -> orderedQuery.map(queuedMessageMapper).findOne(),
-                                                             claimed -> claimed.isPresent() ? 1 : 0)
-                .flatMap(claimed -> claimed);
-        if (queuedMessage.isPresent()) {
-            return queuedMessage;
+            Optional<QueuedMessage> queuedMessage = claimOrdered(handle, queueName, byHeadScan, 1,
+                                                                 () -> orderedQuery.map(queuedMessageMapper).findOne(),
+                                                                 claimed -> claimed.isPresent() ? 1 : 0)
+                    .flatMap(claimed -> claimed);
+            afterOrderedClaim(handle, queueName, orderedClaimSkipEpoch, pollNanos, queuedMessage.isPresent() ? 1 : 0);
+            if (queuedMessage.isPresent()) {
+                return queuedMessage;
+            }
         }
 
         var unorderedSql = durableQueuesSql.buildUnorderedSqlStatement();
@@ -1670,6 +1685,11 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             return Collections.emptyList();
         }
 
+        // Before the poll's first statement - see OrderedClaimSkip
+        var orderedClaimSkipEpochs = new HashMap<QueueName, Long>(queueNames.size() * 2);
+        for (var queueName : queueNames) {
+            orderedClaimSkipEpochs.put(queueName, orderedClaimSkipEpoch(queueName));
+        }
         try {
             return unitOfWorkFactory.withUnitOfWork(uow -> {
                 resetMessagesStuckBeingDeliveredAcrossMultipleQueues(queueNames);
@@ -1700,25 +1720,31 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     List<QueuedMessage>  messagesForQueue;
                     MessageMappingResult mappingResult;
 
-                    var byHeadScan = orderedClaimByHeadScan(queueName);
-                    var orderedSql = byHeadScan
-                                     ? durableQueuesSql.buildOrderedHeadScanSqlStatement(!excluded.isEmpty())
-                                     : durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
-                    var orderedQ = uow.handle().createQuery(orderedSql)
-                                      .bind("queueName", queueName)
-                                      .bind("now", now)
-                                      .bind("limit", availableWorkerSlotsForThisQueue);
-                    if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
+                    var orderedClaimSkipEpoch = orderedClaimSkipEpochs.get(queueName);
+                    var pollNanos             = System.nanoTime();
+                    messagesForQueue = List.of();
+                    if (orderedClaimNeeded(uow.handle(), queueName, orderedClaimSkipEpoch, pollNanos)) {
+                        var byHeadScan = orderedClaimByHeadScan(queueName);
+                        var orderedSql = byHeadScan
+                                         ? durableQueuesSql.buildOrderedHeadScanSqlStatement(!excluded.isEmpty())
+                                         : durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
+                        var orderedQ = uow.handle().createQuery(orderedSql)
+                                          .bind("queueName", queueName)
+                                          .bind("now", now)
+                                          .bind("limit", availableWorkerSlotsForThisQueue);
+                        if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
 
-                    var orderedClaim = claimOrdered(uow.handle(), queueName, byHeadScan, availableWorkerSlotsForThisQueue,
-                                                    () -> mapQueryResultsWithExceptionHandling(orderedQ),
-                                                    claimed -> claimed.successfulMessages().size() + claimed.failedMappings().size());
-                    if (orderedClaim.isPresent()) {
-                        mappingResult = orderedClaim.get();
-                        messagesForQueue = mappingResult.successfulMessages();
-                        handleFailedMappings(queueName, mappingResult);
-                    } else {
-                        messagesForQueue = List.of();
+                        var orderedClaim = claimOrdered(uow.handle(), queueName, byHeadScan, availableWorkerSlotsForThisQueue,
+                                                        () -> mapQueryResultsWithExceptionHandling(orderedQ),
+                                                        claimed -> claimed.successfulMessages().size() + claimed.failedMappings().size());
+                        var orderedClaimed = 0;
+                        if (orderedClaim.isPresent()) {
+                            mappingResult = orderedClaim.get();
+                            messagesForQueue = mappingResult.successfulMessages();
+                            orderedClaimed = mappingResult.successfulMessages().size() + mappingResult.failedMappings().size();
+                            handleFailedMappings(queueName, mappingResult);
+                        }
+                        afterOrderedClaim(uow.handle(), queueName, orderedClaimSkipEpoch, pollNanos, orderedClaimed);
                     }
 
                     // Fill whatever the ordered claim left free. Running the unordered claim only when the ordered
@@ -2054,6 +2080,84 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
+     * How often a queue whose polls skip the ordered claim checks the table for an ordered message again - see
+     * {@link OrderedClaimSkip}. Bounds the extra wait of the first ordered message that another node queues or
+     * resurrects on a queue that held none
+     */
+    public static final Duration DEFAULT_ORDERED_CLAIM_SKIP_RECHECK_INTERVAL = Duration.ofSeconds(1);
+
+    /**
+     * Zero or negative: never skip the ordered claim
+     */
+    void setOrderedClaimSkipRecheckInterval(Duration interval) {
+        requireNonNull(interval, "No interval provided");
+        this.orderedClaimSkipRecheckIntervalNanos = interval.toNanos();
+        orderedClaimSkips.clear();
+    }
+
+    /**
+     * For tests: whether polls of the queue currently leave out the ordered claim
+     */
+    boolean isSkippingOrderedClaim(QueueName queueName) {
+        var skip = orderedClaimSkips.get(queueName);
+        return skip != null && skip.shouldSkip(System.nanoTime());
+    }
+
+    /**
+     * Read before the poll's first statement - see {@link OrderedClaimSkip}
+     */
+    private long orderedClaimSkipEpoch(QueueName queueName) {
+        if (orderedClaimSkipRecheckIntervalNanos <= 0) {
+            return 0;
+        }
+        return orderedClaimSkips.computeIfAbsent(queueName, q -> new OrderedClaimSkip()).epoch();
+    }
+
+    /**
+     * Whether this poll must run the queue's ordered claim. When an earlier skip has run out, checks the table first
+     */
+    private boolean orderedClaimNeeded(Handle handle, QueueName queueName, long epochBeforePoll, long pollNanos) {
+        var intervalNanos = orderedClaimSkipRecheckIntervalNanos;
+        if (intervalNanos <= 0) {
+            return true;
+        }
+        var skip = orderedClaimSkips.computeIfAbsent(queueName, q -> new OrderedClaimSkip());
+        if (skip.shouldSkip(pollNanos)) {
+            return false;
+        }
+        if (skip.skipGranted()) {
+            // The skip ran out with nothing local having queued an ordered message: check rather than claim
+            var keyedMessagesExist = hasKeyedMessageOutsideDeadLetterQueue(handle, queueName);
+            skip.checked(epochBeforePoll, keyedMessagesExist, pollNanos, intervalNanos);
+            return keyedMessagesExist;
+        }
+        return true;
+    }
+
+    /**
+     * After an ordered claim: start skipping once a check finds no ordered message left
+     */
+    private void afterOrderedClaim(Handle handle, QueueName queueName, long epochBeforePoll, long pollNanos, int claimed) {
+        var intervalNanos = orderedClaimSkipRecheckIntervalNanos;
+        if (intervalNanos <= 0) {
+            return;
+        }
+        var skip = orderedClaimSkips.computeIfAbsent(queueName, q -> new OrderedClaimSkip());
+        if (claimed > 0) {
+            skip.orderedMessagesClaimed();
+        } else if (skip.checkDue(pollNanos, intervalNanos)) {
+            skip.checked(epochBeforePoll, hasKeyedMessageOutsideDeadLetterQueue(handle, queueName), pollNanos, intervalNanos);
+        }
+    }
+
+    private boolean hasKeyedMessageOutsideDeadLetterQueue(Handle handle, QueueName queueName) {
+        return handle.createQuery(durableQueuesSql.getHasKeyedMessageOutsideDeadLetterQueueSql())
+                     .bind("queueName", queueName)
+                     .mapTo(Boolean.class)
+                     .one();
+    }
+
+    /**
      * The default of {@link PostgresqlDurableQueuesBuilder#setOrderedClaimSlowThreshold(Duration)}: an ordered claim
      * faster than this never makes a queue switch ordered-claim statement
      */
@@ -2196,7 +2300,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * A message this node queued, registered with the enqueuing {@link UnitOfWork} so the queue's local consumer can be
      * told once it commits - see {@link LocalEnqueueSignal}
      */
-    private record LocallyQueuedMessage(QueueName queueName, QueueEntryId queueEntryId, Message message, Instant dueAt) {
+    private record LocallyQueuedMessage(QueueName queueName, QueueEntryId queueEntryId, Message message, Instant dueAt, boolean ordered) {
+        LocallyQueuedMessage(QueueName queueName, QueueEntryId queueEntryId, Message message, Instant dueAt) {
+            this(queueName, queueEntryId, message, dueAt, message instanceof OrderedMessage);
+        }
     }
 
     /**
@@ -2234,6 +2341,12 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             associatedResources.stream()
                                .collect(Collectors.groupingBy(LocallyQueuedMessage::queueName, LinkedHashMap::new, Collectors.toList()))
                                .forEach((queueName, scheduled) -> {
+                                   if (scheduled.stream().anyMatch(LocallyQueuedMessage::ordered)) {
+                                       var orderedClaimSkip = orderedClaimSkips.get(queueName);
+                                       if (orderedClaimSkip != null) {
+                                           orderedClaimSkip.orderedMessageMayHaveArrived();
+                                       }
+                                   }
                                    // The queue's consumer polls either through the centralized message fetcher or
                                    // on its own (useCentralizedMessageFetcher(false)) - both back off while idle
                                    DurableQueueConsumerNotifications consumer;

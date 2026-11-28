@@ -34,6 +34,12 @@ class EssentialsComponentsPropertiesDefaultsTest {
     }
 
     @Test
+    void durable_queues_ordered_claim_skip_recheck_interval_matches_the_component_default() {
+        assertThat(new EssentialsComponentsProperties().getDurableQueues().getOrderedClaimSkipRecheckInterval())
+                .isEqualTo(PostgresqlDurableQueues.DEFAULT_ORDERED_CLAIM_SKIP_RECHECK_INTERVAL);
+    }
+
+    @Test
     void multi_table_change_listener_polling_interval_matches_the_component_default() {
         assertThat(new EssentialsComponentsProperties().getMultiTableChangeListener().getPollingInterval())
                 .isEqualTo(PostgresqlDurableQueuesBuilder.DEFAULT_CHANGE_LISTENER_POLLING_INTERVAL);

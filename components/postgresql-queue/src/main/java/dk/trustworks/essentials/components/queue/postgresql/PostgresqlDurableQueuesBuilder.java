@@ -79,6 +79,7 @@ public final class PostgresqlDurableQueuesBuilder {
     private DurableQueueMessageObserver                messageObserver                          = DurableQueueMessageObserver.none();
     private boolean                                    requireActiveUnitOfWorkForEnqueue        = false;
     private Duration                                   orderedClaimSlowThreshold                = PostgresqlDurableQueues.DEFAULT_ORDERED_CLAIM_SLOW_THRESHOLD;
+    private Duration                                   orderedClaimSkipRecheckInterval          = PostgresqlDurableQueues.DEFAULT_ORDERED_CLAIM_SKIP_RECHECK_INTERVAL;
 
     /**
      * @param unitOfWorkFactory the {@link UnitOfWorkFactory} needed to access the database
@@ -304,6 +305,28 @@ public final class PostgresqlDurableQueuesBuilder {
     }
 
     /**
+     * Each poll claims ordered messages before unordered ones, which on a queue that holds no ordered message is a
+     * statement that always comes back empty - one database round trip per poll. Once a check finds no ordered
+     * message on a queue outside its dead letter queue, polls leave the ordered claim out, and check the table again
+     * once per this interval.<br>
+     * An ordered message this node queues, retries or resurrects ends the skip as soon as its transaction commits. One
+     * queued or resurrected by <b>another</b> node, or by SQL, is only noticed at the next check, so the first ordered
+     * message on such a queue can wait up to this interval longer than otherwise. Queues that hold ordered messages
+     * never skip.<br>
+     * {@link Duration#ZERO} turns the skip off: every poll runs the ordered claim, as before 0.61.1.<br>
+     * Default {@link PostgresqlDurableQueues#DEFAULT_ORDERED_CLAIM_SKIP_RECHECK_INTERVAL}
+     *
+     * @param orderedClaimSkipRecheckInterval the interval - not negative; zero turns the skip off
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setOrderedClaimSkipRecheckInterval(Duration orderedClaimSkipRecheckInterval) {
+        requireNonNull(orderedClaimSkipRecheckInterval, "No orderedClaimSkipRecheckInterval provided");
+        requireFalse(orderedClaimSkipRecheckInterval.isNegative(), "orderedClaimSkipRecheckInterval must not be negative");
+        this.orderedClaimSkipRecheckInterval = orderedClaimSkipRecheckInterval;
+        return this;
+    }
+
+    /**
      * Whether {@link #build()} creates a {@link MultiTableChangeListener} when none was set with
      * {@link #setMultiTableChangeListener(MultiTableChangeListener)}. Default {@code true}, so a builder-made instance
      * is wired like the Spring Boot starter's: LISTEN/NOTIFY on the queue table (polled every 50 ms), and a polling
@@ -367,6 +390,7 @@ public final class PostgresqlDurableQueuesBuilder {
         durableQueues.setMessageObserver(messageObserver);
         durableQueues.setRequireActiveUnitOfWorkForEnqueue(requireActiveUnitOfWorkForEnqueue);
         durableQueues.setOrderedClaimSlowThreshold(orderedClaimSlowThreshold);
+        durableQueues.setOrderedClaimSkipRecheckInterval(orderedClaimSkipRecheckInterval);
         if (ownedListenerEventBus != null) {
             durableQueues.ownMultiTableChangeListener(ownedListenerEventBus);
         }

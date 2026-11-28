@@ -369,6 +369,8 @@ public class EssentialsComponentsProperties {
         private boolean           useBatchedFetch                          = false;
         private int               batchedFetchSwitchThreshold              = 4;
         private int               batchedFetchWarnRowsThreshold            = 5000;
+        // Literal, not PostgresqlDurableQueues.DEFAULT_ORDERED_CLAIM_SKIP_RECHECK_INTERVAL, for the configuration metadata
+        private Duration          orderedClaimSkipRecheckInterval          = Duration.ofSeconds(1);
 
         private final DurableQueuesHealthProperties health = new DurableQueuesHealthProperties();
 
@@ -655,6 +657,28 @@ public class EssentialsComponentsProperties {
          */
         public void setCentralizedMessageFetcherPollingInterval(Duration centralizedMessageFetcherPollingInterval) {
             this.centralizedMessageFetcherPollingInterval = centralizedMessageFetcherPollingInterval;
+        }
+
+        /**
+         * How often a queue that holds no ordered message checks the table for one again. Until then its polls leave
+         * the ordered claim out, saving one database round trip per poll. An ordered message queued or resurrected by
+         * this node ends the skip at once; one queued or resurrected by another node can wait up to this interval.
+         * {@code 0} turns the skip off. Default 1 second.
+         *
+         * @return the re-check interval
+         */
+        public Duration getOrderedClaimSkipRecheckInterval() {
+            return orderedClaimSkipRecheckInterval;
+        }
+
+        /**
+         * How often a queue that holds no ordered message checks the table for one again - see
+         * {@link #getOrderedClaimSkipRecheckInterval()}. {@code 0} turns the skip off.
+         *
+         * @param orderedClaimSkipRecheckInterval the re-check interval
+         */
+        public void setOrderedClaimSkipRecheckInterval(Duration orderedClaimSkipRecheckInterval) {
+            this.orderedClaimSkipRecheckInterval = orderedClaimSkipRecheckInterval;
         }
 
         /**
