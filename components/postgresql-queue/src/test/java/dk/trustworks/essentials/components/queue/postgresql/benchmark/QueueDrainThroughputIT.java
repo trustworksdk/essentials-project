@@ -44,6 +44,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Every handler runs inside a unit of work that takes a pooled connection for its whole duration, and the
  * acknowledgement takes another. With more consumers than connections, handlers queue on the pool, and this
  * reports how many waited, alongside the throughput.
+ * <p>
+ * Each round drains once per handler executor, alternating: the default platform-thread pool, a pool of
+ * {@code parallelConsumers} virtual threads, and one virtual thread per message (plan item D4). Both virtual variants
+ * are passed through {@link ConsumeFromQueue#getConsumerExecutorService()}, which exists on every 0.60 release. The pool
+ * size can be raised with {@code -Ddrain.poolSize=N} to see the threads' effect once connections stop being the limit.
  */
 @Testcontainers
 @EnabledIfSystemProperty(named = "benchmark.run", matches = "true")
@@ -51,7 +56,7 @@ class QueueDrainThroughputIT {
     private static final int      QUEUES             = 2;
     private static final int      MESSAGES_PER_QUEUE = 20_000;
     private static final int      PARALLEL_CONSUMERS = 32;
-    private static final int      POOL_SIZE          = 10;
+    private static final int      POOL_SIZE          = Integer.getInteger("drain.poolSize", 10);
     private static final int      ROUNDS             = 3;
 
     @Container
@@ -89,18 +94,20 @@ class QueueDrainThroughputIT {
     void drain_through_a_bounded_pool() throws Exception {
         var results = new ArrayList<String>();
         for (var round = 1; round <= ROUNDS; round++) {
-            results.add(drainOnce(round));
+            for (var executor : HandlerExecutor.values()) {
+                results.add(drainOnce(round, executor));
+            }
         }
         System.out.printf("%n=== Drain %d queues x %,d messages, %d consumers each, pool %d ===%n%s%n%n",
                           QUEUES, MESSAGES_PER_QUEUE, PARALLEL_CONSUMERS, POOL_SIZE, String.join("\n", results));
     }
 
-    private String drainOnce(int round) throws Exception {
+    private String drainOnce(int round, HandlerExecutor executor) throws Exception {
         consumers.forEach(DurableQueueConsumer::cancel);
         consumers.clear();
         var queueNames = new ArrayList<QueueName>();
         for (var q = 0; q < QUEUES; q++) {
-            var queueName = QueueName.of("Drain-" + round + "-" + q);
+            var queueName = QueueName.of("Drain-" + round + "-" + executor + "-" + q);
             queueNames.add(queueName);
             for (var offset = 0; offset < MESSAGES_PER_QUEUE; offset += 500) {
                 var messages = new ArrayList<Message>(500);
@@ -125,7 +132,9 @@ class QueueDrainThroughputIT {
 
         var startedAt = System.nanoTime();
         for (var queueName : queueNames) {
-            consumers.add(durableQueues.consumeFromQueue(ConsumeFromQueue.builder()
+            var builder = ConsumeFromQueue.builder();
+            executor.executorService().ifPresent(builder::setConsumerExecutorService);
+            consumers.add(durableQueues.consumeFromQueue(builder
                                                                          .setQueueName(queueName)
                                                                          .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 3))
                                                                          .setParallelConsumers(PARALLEL_CONSUMERS)
@@ -144,8 +153,84 @@ class QueueDrainThroughputIT {
         sampler.shutdownNow();
 
         assertThat(handled.get()).isEqualTo(total);
-        return String.format("  round %d: %,6d ms, %,7.0f msg/s, threads awaiting a connection: avg %.1f, max %d",
-                             round, elapsed.toMillis(), total * 1_000d / elapsed.toMillis(),
+        return String.format("  round %d, %-16s %,6d ms, %,7.0f msg/s, threads awaiting a connection: avg %.1f, max %d",
+                             round, executor + ":", elapsed.toMillis(), total * 1_000d / elapsed.toMillis(),
                              (double) pendingSamples.sum() / Math.max(1, samples.sum()), maxPending.get());
+    }
+
+    private enum HandlerExecutor {
+        PLATFORM_POOL,
+        VIRTUAL_POOL,
+        VIRTUAL_PER_TASK;
+
+        /**
+         * Empty: the consumer's default, a scheduled pool of parallelConsumers platform threads
+         */
+        Optional<ScheduledExecutorService> executorService() {
+            return switch (this) {
+                case PLATFORM_POOL -> Optional.empty();
+                case VIRTUAL_POOL -> Optional.of(Executors.newScheduledThreadPool(PARALLEL_CONSUMERS, Thread.ofVirtual().name("drain-vt-pool-", 0).factory()));
+                case VIRTUAL_PER_TASK -> Optional.of(new VirtualThreadPerTaskScheduledExecutor());
+            };
+        }
+    }
+
+    /**
+     * One new virtual thread per submitted handler. The centralized fetcher only submits as many handlers as the queue
+     * has free slots, so {@code parallelConsumers} still bounds them - the semaphore the plan mentions is the fetcher's
+     * slot count. Scheduling is not supported: the centralized fetcher never schedules on the worker pool
+     */
+    private static final class VirtualThreadPerTaskScheduledExecutor extends AbstractExecutorService implements ScheduledExecutorService {
+        private final ExecutorService delegate = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("drain-vt-", 0).factory());
+
+        @Override
+        public void execute(Runnable command) {
+            delegate.execute(command);
+        }
+
+        @Override
+        public void shutdown() {
+            delegate.shutdown();
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            return delegate.shutdownNow();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return delegate.isShutdown();
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return delegate.isTerminated();
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+            return delegate.awaitTermination(timeout, unit);
+        }
+
+        @Override
+        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public <V> ScheduledFuture<V> schedule(Callable<V> callable, long delay, TimeUnit unit) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ScheduledFuture<?> scheduleAtFixedRate(Runnable command, long initialDelay, long period, TimeUnit unit) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ScheduledFuture<?> scheduleWithFixedDelay(Runnable command, long initialDelay, long delay, TimeUnit unit) {
+            throw new UnsupportedOperationException();
+        }
     }
 }

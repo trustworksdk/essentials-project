@@ -279,6 +279,16 @@ Shard-owned's `PoolBudget` refuses, at startup, a pool that its pumps would exha
 
 Default the worker pool to virtual threads with a semaphore of `parallelConsumers` permits, as shard-owned does (`ShardRuntime.java:205`). Users can already pass their own executor through `ConsumeFromQueue.consumerExecutorService`, so a benchmark needs no code change. Do D0 and D1 first, so the effect of virtual threads is not hidden behind connection waits. Thread-local unit-of-work state must still work, and it should because each handler runs on its own virtual thread.
 
+**Closed, not built (2026-11-28): no measured gain.** `QueueDrainThroughputIT` now drains once per handler executor in every round, alternating: the default pool of `parallelConsumers` platform threads, a pool of that many virtual threads, and one virtual thread per message (the centralized fetcher's free-slot count is the bound, so no extra semaphore is needed). Each passed through `consumerExecutorService`; 2 queues × 20 000 messages, 32 consumers each, 3 rounds.
+
+| Executor | Pool of 10 connections, msg/s | Pool of 40 connections (`-Ddrain.poolSize=40`), msg/s |
+| --- | --- | --- |
+| Platform pool (default) | 12 300 / 13 587 / 13 889 | 12 808 / 35 682 / 37 951 |
+| Virtual pool | 12 618 / 13 042 / 13 436 | 14 987 / 26 560 / 29 851 |
+| Virtual per task | 12 465 / 13 500 / 13 193 | 28 409 / 28 189 / 13 004 |
+
+With 10 connections the pool is the limit and the three are within about ±4%; the virtual variants only put more threads in the connection queue (average 5–6 waiting against about 1). With 40 connections the platform pool is fastest in the steadier rounds; those drains last 1–3 s, so the spread is noisy, but nothing points to a gain. Handlers here wait on the database, which virtual threads do not make faster. The default stays; an application that wants virtual threads can pass its own executor through `consumerExecutorService`.
+
 ## Workstream E — Small fixes
 
 - **E1. `getDeliveryMode()`**: return `IN_ORDER` when `getMessage()` is an `OrderedMessage`, or carry the row's `delivery_mode` through. Update the unit test. The Rust interop test that pins the current behaviour has to change at the same time.
