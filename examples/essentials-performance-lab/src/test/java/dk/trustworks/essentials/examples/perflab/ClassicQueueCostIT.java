@@ -80,7 +80,12 @@ class ClassicQueueCostIT {
 
     enum Shape {BATCHED, CONCURRENT}
 
-    enum Trigger {ROW_INSERT_UPDATE, ROW_INSERT_ONLY, STATEMENT_PER_QUEUE, NONE}
+    /**
+     * {@link #AFTER_COMMIT_COALESCED}: listener present, no trigger; producers hand the queue name to a
+     * {@link CoalescingNotifier} after their enqueue transaction committed, which sends one autocommit
+     * {@code pg_notify} statement per drained batch of queue names.
+     */
+    enum Trigger {ROW_INSERT_UPDATE, ROW_INSERT_ONLY, STATEMENT_PER_QUEUE, AFTER_COMMIT_COALESCED, NONE}
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();
@@ -132,6 +137,7 @@ class ClassicQueueCostIT {
             arms.put("row-insert-update", rep -> measure(shape, Trigger.ROW_INSERT_UPDATE, false, rep, environment));
             arms.put("row-insert-only", rep -> measure(shape, Trigger.ROW_INSERT_ONLY, false, rep, environment));
             arms.put("statement-per-queue", rep -> measure(shape, Trigger.STATEMENT_PER_QUEUE, false, rep, environment));
+            arms.put("after-commit-coalesced", rep -> measure(shape, Trigger.AFTER_COMMIT_COALESCED, false, rep, environment));
             arms.put("no-listener", rep -> measure(shape, Trigger.NONE, false, rep, environment));
             if (shape == Shape.BATCHED) {
                 arms.put("row-insert-update+stuck-idx", rep -> measure(shape, Trigger.ROW_INSERT_UPDATE, true, rep, environment));
@@ -182,7 +188,7 @@ class ClassicQueueCostIT {
         try {
             applyArmSchema(trigger, stuckIndex);
             var triggers = userTriggers(TABLE);
-            assertThat(triggers).as("triggers for %s", trigger).hasSize(trigger == Trigger.NONE ? 0 : 1);
+            assertThat(triggers).as("triggers for %s", trigger).hasSize(trigger == Trigger.NONE || trigger == Trigger.AFTER_COMMIT_COALESCED ? 0 : 1);
             execute("TRUNCATE TABLE " + TABLE);
 
             consumer = durableQueues.consumeFromQueue(ConsumeFromQueue.builder()
@@ -193,6 +199,8 @@ class ClassicQueueCostIT {
                                                                      .build());
 
             harnessCommits.set(0);
+            // Notifier statements are part of the arm's cost, so they are not subtracted from the commit count
+            var notifier = trigger == Trigger.AFTER_COMMIT_COALESCED ? new CoalescingNotifier(ListenNotify.resolveTableChangeChannelName(TABLE)) : null;
             try (var notifications = new NotificationCounter(ListenNotify.resolveTableChangeChannelName(TABLE));
                  var sampler = new WaitEventSampler()) {
                 var before = PgSnapshot.capture(dataSource, List.of(TABLE));
@@ -206,6 +214,10 @@ class ClassicQueueCostIT {
                             messages.add(Message.of(new BenchPayload(payload)));
                         }
                         durableQueues.queueMessages(queueName, messages);
+                        // queueMessages ran in its own unit of work, which has committed by now
+                        if (notifier != null) {
+                            notifier.queued(queueName);
+                        }
                     }
                 } else {
                     var executor = Executors.newFixedThreadPool(CONCURRENT_PRODUCERS);
@@ -215,6 +227,9 @@ class ClassicQueueCostIT {
                             futures.add(executor.submit(() -> {
                                 for (var index = 0; index < messageCount / CONCURRENT_PRODUCERS; index++) {
                                     durableQueues.queueMessage(queueName, Message.of(new BenchPayload(payload)));
+                                    if (notifier != null) {
+                                        notifier.queued(queueName);
+                                    }
                                 }
                             }));
                         }
@@ -233,6 +248,9 @@ class ClassicQueueCostIT {
                 var elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000L;
 
                 sampler.stop();
+                if (notifier != null) {
+                    notifier.close();
+                }
                 // Notifications are delivered asynchronously after commit; let the last ones arrive
                 Thread.sleep(500);
                 notifications.stop();
@@ -244,7 +262,11 @@ class ClassicQueueCostIT {
                 settleStatistics(before, messageCount);
                 var after = PgSnapshot.capture(dataSource, List.of(TABLE));
                 return buildResult(shape, trigger, stuckIndex, repetition, elapsedMillis, messageCount, before, after,
-                                   notifications.count(), sampler, triggers, environment);
+                                   notifications.count(), sampler, triggers, environment, notifier);
+            } finally {
+                if (notifier != null) {
+                    notifier.close();
+                }
             }
         } finally {
             if (consumer != null) {
@@ -282,7 +304,7 @@ class ClassicQueueCostIT {
                 execute("CREATE TRIGGER " + STATEMENT_TRIGGER + " AFTER INSERT ON " + TABLE +
                         " REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION " + STATEMENT_FUNCTION + "()");
             }
-            case NONE -> {
+            case AFTER_COMMIT_COALESCED, NONE -> {
             }
         }
         if (stuckIndex) {
@@ -324,7 +346,7 @@ class ClassicQueueCostIT {
 
     private RunResult buildResult(Shape shape, Trigger trigger, boolean stuckIndex, int repetition, long elapsedMillis, int messageCount,
                                   PgSnapshot before, PgSnapshot after, long notifications, WaitEventSampler sampler,
-                                  List<String> triggers, Map<String, String> environment) {
+                                  List<String> triggers, Map<String, String> environment, CoalescingNotifier notifier) {
         var delta = after.deltaFrom(before);
         var updates = delta.getOrDefault("table." + TABLE + ".n_tup_upd", 0L);
         var deletes = delta.getOrDefault("table." + TABLE + ".n_tup_del", 0L);
@@ -342,6 +364,9 @@ class ClassicQueueCostIT {
         extra.put("commitsPerMessage", (double) commits / messageCount);
         extra.put("notifications", notifications);
         extra.put("notificationsPerMessage", (double) notifications / messageCount);
+        extra.put("notifierStatements", notifier == null ? 0L : notifier.statements());
+        extra.put("notifierStatementsPerMessage", notifier == null ? 0.0d : (double) notifier.statements() / messageCount);
+        extra.put("notifierQueueNamesSent", notifier == null ? 0L : notifier.queueNamesSent());
         extra.put("activeSamples", sampler.activeSamples());
         extra.put("sampleTicks", sampler.ticks());
         extra.put("waitLockShare", sampler.share(key -> key.startsWith("Lock/")));
@@ -362,6 +387,7 @@ class ClassicQueueCostIT {
             case ROW_INSERT_UPDATE -> "row-insert-update";
             case ROW_INSERT_ONLY -> "row-insert-only";
             case STATEMENT_PER_QUEUE -> "statement-per-queue";
+            case AFTER_COMMIT_COALESCED -> "after-commit-coalesced";
             case NONE -> "no-listener";
         };
         return stuckIndex ? name + "+stuck-idx" : name;
@@ -372,13 +398,13 @@ class ClassicQueueCostIT {
         builder.append("======== CLASSIC QUEUE ").append(shape).append(", ")
                .append(shape == Shape.BATCHED ? BATCHED_MESSAGES + " msgs, 100/tx, 1 producer" : CONCURRENT_MESSAGES + " msgs, 1/tx, 8 producers")
                .append(", ").append(REPETITIONS).append(" reps, ").append(PAYLOAD_BYTES).append("-byte payloads ========\n");
-        builder.append(String.format("%-28s %9s %6s %8s %7s %8s %8s %6s %7s %7s %7s %7s %7s %9s%n",
+        builder.append(String.format("%-28s %9s %6s %8s %7s %8s %8s %6s %7s %7s %7s %7s %7s %9s %9s%n",
                                      "arm", "WAL B/msg", "IQR%", "dead/msg", "upd/msg", "cmt/msg", "ntf/msg",
-                                     "Lock%", "LkObj%", "LWLk%", "WALWr%", "WalSy%", "samples", "msgs/s"));
+                                     "Lock%", "LkObj%", "LWLk%", "WALWr%", "WalSy%", "samples", "msgs/s", "nStmt/msg"));
         for (var summary : summaries) {
             var arm = results.stream().filter(r -> r.arm().equals(summary.arm())).toList();
             var wal = summary.walBytesPerOperation();
-            builder.append(String.format("%-28s %9.0f %5.1f%% %8.2f %7.2f %8.3f %8.3f %5.1f%% %6.1f%% %6.1f%% %6.1f%% %6.1f%% %7d %9.0f%n",
+            builder.append(String.format("%-28s %9.0f %5.1f%% %8.2f %7.2f %8.3f %8.3f %5.1f%% %6.1f%% %6.1f%% %6.1f%% %6.1f%% %7d %9.0f %9.4f%n",
                                          summary.arm(),
                                          wal.median(),
                                          100.0d * wal.interQuartileRange() / Math.max(1.0d, wal.median()),
@@ -392,7 +418,8 @@ class ClassicQueueCostIT {
                                          100 * mean(arm, "waitWalWriteShare"),
                                          100 * mean(arm, "waitWalSyncShare"),
                                          arm.stream().mapToLong(r -> (Long) r.extra().get("activeSamples")).sum(),
-                                         summary.throughputPerSecond().median()));
+                                         summary.throughputPerSecond().median(),
+                                         mean(arm, "notifierStatementsPerMessage")));
         }
         builder.append("WAL = median, IQR relative; other ratios = mean of reps; wait shares = share of sampled active backends (pooled over reps, mean of per-rep shares)\n");
         return builder.toString();
@@ -448,6 +475,86 @@ class ClassicQueueCostIT {
              var resultSet = statement.executeQuery("SELECT xact_commit FROM pg_stat_database WHERE datname = current_database()")) {
             resultSet.next();
             return resultSet.getLong(1);
+        }
+    }
+
+    /**
+     * Option 3 of step 1: a single thread that sends the notifications for enqueues that have already committed.
+     * Producers add the queue name to a shared set and signal; the thread drains the set and, when it is non-empty,
+     * sends one autocommit statement notifying every drained queue name, then waits for the next signal. The payload
+     * mirrors the statement-per-queue arm's ({@code added_ts} is required by {@code DefaultQueuedMessage}).
+     */
+    private final class CoalescingNotifier implements AutoCloseable {
+        private final Connection    connection;
+        private final String        sql;
+        private final Set<String>   pending         = ConcurrentHashMap.newKeySet();
+        private final Semaphore     signal          = new Semaphore(0);
+        private final AtomicBoolean running         = new AtomicBoolean(true);
+        private final AtomicLong    statements      = new AtomicLong();
+        private final AtomicLong    queueNamesSent  = new AtomicLong();
+        private final Thread        thread;
+        private       boolean       closed;
+
+        CoalescingNotifier(String channel) throws SQLException {
+            connection = DriverManager.getConnection(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
+            connection.setAutoCommit(true);
+            sql = "SELECT pg_notify('" + channel + "', json_build_object('table_name', '" + TABLE + "', 'sql_operation', 'INSERT', " +
+                  "'queue_name', q, 'added_ts', now())::text) FROM unnest(?::text[]) q";
+            thread = Thread.ofPlatform().name("coalescing-notifier").start(this::loop);
+        }
+
+        void queued(QueueName queueName) {
+            pending.add(queueName.toString());
+            signal.release();
+        }
+
+        private void loop() {
+            try (var statement = connection.prepareStatement(sql)) {
+                while (true) {
+                    var stopping = !running.get();
+                    if (!stopping) {
+                        signal.tryAcquire(100, TimeUnit.MILLISECONDS);
+                    }
+                    signal.drainPermits();
+                    var drained = new ArrayList<String>();
+                    for (var iterator = pending.iterator(); iterator.hasNext(); ) {
+                        drained.add(iterator.next());
+                        iterator.remove();
+                    }
+                    if (!drained.isEmpty()) {
+                        statement.setArray(1, connection.createArrayOf("text", drained.toArray()));
+                        try (var ignored = statement.executeQuery()) {
+                            statements.incrementAndGet();
+                            queueNamesSent.addAndGet(drained.size());
+                        }
+                    }
+                    if (stopping) {
+                        return;
+                    }
+                }
+            } catch (Exception e) {
+                log.error("Coalescing notifier failed", e);
+            }
+        }
+
+        long statements() {
+            return statements.get();
+        }
+
+        long queueNamesSent() {
+            return queueNamesSent.get();
+        }
+
+        @Override
+        public void close() throws Exception {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            running.set(false);
+            signal.release();
+            thread.join(5_000);
+            connection.close();
         }
     }
 

@@ -211,3 +211,52 @@ not worth it as a default. Revisit only for tables far larger than this one, and
   measure it in the concurrent shape before touching production code.
 - Step 3: dropped as a default.
 - Step 2 (correctness test) is independent of these numbers and is next in parallel.
+
+### Run 2 - 2026-11-28, option 3 arm (`after-commit-coalesced`)
+
+Same harness and conditions as run 1. The new arm has the listener but no trigger. After its unit of
+work commits, a producer adds the queue name to a shared set. A single notifier thread drains the set
+and sends one autocommit `SELECT pg_notify(...) FROM unnest(?)`, with the same payload as
+`statement-per-queue`.
+
+**Concurrent shape** (8 producers, one message per transaction):
+
+| Arm | WAL B/msg | Commits/msg | Notifications/msg | Notifier statements/msg | Lock/object wait | msgs/s |
+|---|---|---|---|---|---|---|
+| row-insert-update (today) | 1 318 | 3.21 | 2.000 | - | 65.4 % | 5 908 |
+| row-insert-only | 1 358 | 3.10 | 1.000 | - | 65.1 % | 6 056 |
+| statement-per-queue | 1 383 | 3.10 | 1.000 | - | 64.7 % | 6 206 |
+| after-commit-coalesced | 1 388 | 3.08 | 0.495 | 0.495 | 0.0 % | 11 364 |
+| no-listener | 1 360 | 2.12 | 0.000 | - | 0.0 % | 13 605 |
+
+- Taking `pg_notify` out of the enqueue transaction removes the commit-lock wait completely, and
+  throughput doubles to within ~17 % of the no-listener floor. Coalescing halves the notifications
+  even with only 8 producers.
+- In the batched shape the arm costs the same WAL as every other arm (1 531-1 593 B/msg) and sends one
+  notification per 100-message transaction.
+- Batched throughput is **not usable** in this environment. In every arm, including today's default,
+  the repetitions split into fast (~1.3-2 s) and slow (~5.2-5.4 s) runs. The slow runs are CPU-bound
+  in the database (about three times as many CPU samples, fewer active backends), not client backoff.
+  So run 1's "row-insert-only is slow" was this effect, not the arm. The cause is not identified; it is
+  a candidate for later investigation.
+- In-JVM consumers are already woken after commit without NOTIFY (`LocalEnqueueSignal` in
+  `PostgresqlDurableQueues`). NOTIFY only serves consumers in other JVMs, which is what the coalesced
+  notifier would have to keep doing.
+
+Outcome for step 1: option 3 is the design to implement. Its production shape (where the notifier
+lives, how it hooks into `LocalEnqueueSignal`, schema change to drop the trigger, compatibility with
+older instances that still rely on the trigger during a rolling upgrade) is still to be designed.
+
+### Step 2 outcome - 2026-11-28
+
+Reproduced by `PostgresqlDurableQueuesSlowHandlerIT` (1 s timeout, 3 s handler) in all three cases:
+unordered with the centralized fetcher, unordered with the traditional consumer, and ordered messages
+across two instances (the same key in two handlers at once). The redelivery is a real reset:
+`redelivery_attempts` goes from 0 to 1 and `delivery_ts` changes while the first handler still runs.
+The second handler's acknowledgement then fails, because the first one has already deleted the row.
+
+Decision (user, 2026-11-28): fix it with a claim heartbeat. Each instance refreshes `delivery_ts` for
+its own in-flight messages in one batched UPDATE at an interval well inside `messageHandlingTimeout`,
+and only for messages that have been in flight longer than that interval, so fast handlers cost
+nothing. The refresh is fenced on the claim it refreshes, and a handler that runs past a cap stops
+being refreshed and is logged at WARN, so a hung handler is still taken back eventually.
