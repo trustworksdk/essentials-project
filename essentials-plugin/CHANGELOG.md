@@ -3,6 +3,12 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.61.0-2 — targets Essentials 0.61.0
+
+- **Durable-queue references: the `PostgresqlDurableQueues` claim heartbeat** — the foundation, event-store and
+  postgresql-queue references say that a slow handler's message is no longer redelivered beside it on PostgreSQL until
+  `maxClaimRefreshDuration` (default 10 x `messageHandlingTimeout`). No skill, rule or script changed.
+
 ## 0.61.0-1 — targets Essentials 0.61.0
 
 - **Event-store reference: CDC with `wal2json` on PostgreSQL 17.12 / 18** — such a server needs `wal2json` in

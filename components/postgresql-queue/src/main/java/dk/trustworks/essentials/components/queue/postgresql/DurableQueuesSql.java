@@ -398,6 +398,28 @@ public class DurableQueuesSql {
     }
 
     /**
+     * SQL statement for the claim heartbeat ({@code ClaimHeartbeat}): sets {@code delivery_ts} to {@code :now} for each
+     * {@code (id, delivery_ts)} pair in {@code :ids} / {@code :deliveryTimestamps} whose row is still being delivered
+     * with exactly that {@code delivery_ts} - the value the refreshing instance last wrote - so a claim taken back, and
+     * possibly claimed by another instance since, is never extended. {@code :deliveryTimestamps} holds ISO-8601
+     * instants as text, which PostgreSQL parses exactly to its microsecond precision.
+     *
+     * @return SQL statement returning the ids of the refreshed rows
+     */
+    public String getRefreshClaimsSql() {
+        return bind("""
+                    UPDATE {:tableName} AS q SET
+                    delivery_ts = :now
+                    FROM unnest(CAST(:ids AS text[]), CAST(:deliveryTimestamps AS text[])) AS c(id, delivery_ts)
+                    WHERE q.id = c.id
+                    AND q.is_being_delivered = TRUE
+                    AND q.delivery_ts = CAST(c.delivery_ts AS timestamptz)
+                    RETURNING q.id
+                    """,
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
      * SQL statement for has ordered message queued for key.
      *
      * @return SQL statement for has ordered message queued for key

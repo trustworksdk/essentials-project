@@ -904,7 +904,7 @@ There is no ambient `UnitOfWork` between the two statements, so touching a trans
 **Two responsibilities the mode shifts onto the handler**:
 
 1. **Idempotency is mandatory.** Delivery is at-least-once and the blocking call is no longer part of the transaction that acknowledges the message. A failure after the call returned but before the tail committed redelivers the message and repeats the call.
-2. **The blocking call must time out well inside `DurableQueues` `messageHandlingTimeout`** (30s by default in the Spring Boot starters). Past that timeout the in-flight message is reset as stuck and can be delivered again *concurrently with the still-running first attempt* — which also degrades `OrderedMessage` per-key ordering for as long as that overlap lasts. Size the client's timeout, not just the happy path.
+2. **The blocking call must time out well inside `DurableQueues` `messageHandlingTimeout`** (30s by default in the Spring Boot starters). Past that timeout the in-flight message is reset as stuck and can be delivered again *concurrently with the still-running first attempt* — which also degrades `OrderedMessage` per-key ordering for as long as that overlap lasts. Size the client's timeout, not just the happy path. `PostgresqlDurableQueues` keeps a running handler's claim alive with a claim heartbeat, so there the overlap only starts past `maxClaimRefreshDuration` (default 10 × the timeout) — `DurableQueues.messageHandlingTimeout()` returns that bound; MongoDB queues have no heartbeat.
 
 **Guards**: `NONE` is never silently ignored. Every dispatcher that cannot provide a `UnitOfWork`-free window throws `IllegalStateException` at wiring/start-up time instead:
 

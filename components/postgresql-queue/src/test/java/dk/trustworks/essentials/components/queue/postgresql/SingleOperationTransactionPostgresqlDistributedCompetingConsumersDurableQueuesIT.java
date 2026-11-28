@@ -58,7 +58,12 @@ abstract class SingleOperationTransactionPostgresqlDistributedCompetingConsumers
     protected PostgresqlDurableQueues createDurableQueues(JdbiUnitOfWorkFactory unitOfWorkFactory) {
         return PostgresqlDurableQueues.builder()
                                       .setUnitOfWorkFactory(unitOfWorkFactory)
-                                      .setMessageHandlingTimeout(Duration.ofSeconds(5))
+                                      // Longer than the simulated 5 s database outage: with a 5 s timeout a message whose
+                                      // acknowledgement waited out the outage was already older than the timeout when the
+                                      // database came back, so the stuck-message reset could redeliver it just before the
+                                      // acknowledgement committed - a second handler call, and 1001 handled messages.
+                                      // No claim heartbeat can prevent that: it cannot write while the database is away
+                                      .setMessageHandlingTimeout(Duration.ofSeconds(10))
                                       .setUseCentralizedMessageFetcher(useCentralizedMessageFetcher())
                                       .build();
     }

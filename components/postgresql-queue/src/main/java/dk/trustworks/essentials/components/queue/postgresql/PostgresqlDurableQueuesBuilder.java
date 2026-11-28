@@ -79,6 +79,10 @@ public final class PostgresqlDurableQueuesBuilder {
     private DurableQueueMessageObserver                messageObserver                          = DurableQueueMessageObserver.none();
     private boolean                                    requireActiveUnitOfWorkForEnqueue        = false;
     private Duration                                   orderedClaimSlowThreshold                = PostgresqlDurableQueues.DEFAULT_ORDERED_CLAIM_SLOW_THRESHOLD;
+    /**
+     * {@code null}: {@link PostgresqlDurableQueues#DEFAULT_MAX_CLAIM_REFRESH_TIMEOUT_MULTIPLIER} x {@link #messageHandlingTimeout}
+     */
+    private Duration                                   maxClaimRefreshDuration                  = null;
 
     /**
      * @param unitOfWorkFactory the {@link UnitOfWorkFactory} needed to access the database
@@ -285,6 +289,30 @@ public final class PostgresqlDurableQueuesBuilder {
     }
 
     /**
+     * How long a running handler's claim is kept alive.<br>
+     * The stuck-message reset takes back a claim whose delivery timestamp is older than the
+     * {@link #setMessageHandlingTimeout(Duration) messageHandlingTimeout}. While a handler runs, the instance running it
+     * refreshes that timestamp (a claim heartbeat: one batched UPDATE every third of the timeout, written only for
+     * handlers that have run that long, so fast handlers cost nothing), so a slow handler on a live instance does not get
+     * its message delivered a second time beside it. A handler that runs longer than this duration is no longer refreshed
+     * and a WARN is logged, so the message of a hung handler is still taken back and redelivered. A message claimed by an
+     * instance that dies is not refreshed and is taken back after the timeout, as before.<br>
+     * Default (or {@code null}): {@link PostgresqlDurableQueues#DEFAULT_MAX_CLAIM_REFRESH_TIMEOUT_MULTIPLIER} times the
+     * {@code messageHandlingTimeout} (5 minutes with the default 30 second timeout).
+     * {@link Duration#ZERO} disables the heartbeat - the behaviour before it existed.
+     *
+     * @param maxClaimRefreshDuration the duration - not negative, or {@code null} for the default
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setMaxClaimRefreshDuration(Duration maxClaimRefreshDuration) {
+        if (maxClaimRefreshDuration != null) {
+            requireFalse(maxClaimRefreshDuration.isNegative(), "maxClaimRefreshDuration must not be negative");
+        }
+        this.maxClaimRefreshDuration = maxClaimRefreshDuration;
+        return this;
+    }
+
+    /**
      * How long an ordered claim must take before it counts as slow. A queue claims ordered messages with one of two
      * statements that claim the same messages - one cheap when the backlog has many keys, the other when it has few
      * keys with many messages each - and switches between them only after several slow claims in a row, and only to
@@ -367,6 +395,9 @@ public final class PostgresqlDurableQueuesBuilder {
         durableQueues.setMessageObserver(messageObserver);
         durableQueues.setRequireActiveUnitOfWorkForEnqueue(requireActiveUnitOfWorkForEnqueue);
         durableQueues.setOrderedClaimSlowThreshold(orderedClaimSlowThreshold);
+        if (maxClaimRefreshDuration != null) {
+            durableQueues.configureClaimHeartbeat(maxClaimRefreshDuration);
+        }
         if (ownedListenerEventBus != null) {
             durableQueues.ownMultiTableChangeListener(ownedListenerEventBus);
         }

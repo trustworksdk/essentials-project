@@ -154,6 +154,11 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      */
     private   Optional<Duration>                         messageHandlingTimeout;
     private   Optional<Duration>                         maxUnservedAfterInstanceLoss;
+    /**
+     * Refreshes {@code delivery_ts} of the messages this instance is handling, so the stuck-message reset does not take
+     * them back while their handler runs - see {@link ClaimHeartbeat} and {@link #messageHandlingTimeout()}
+     */
+    private volatile ClaimHeartbeat                      claimHeartbeat;
     private final LocalEnqueueSignal                    localEnqueueSignal = new LocalEnqueueSignal();
     /**
      * Per queue: whether the ordered claim currently uses {@link DurableQueuesSql#buildOrderedHeadScanSqlStatement}
@@ -390,6 +395,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         messageHandlingTimeoutMs = (int) requireNonNull(messageHandlingTimeout, "No messageHandlingTimeout provided").toMillis();
         this.messageHandlingTimeout = Optional.of(Duration.ofMillis(messageHandlingTimeoutMs));
         this.maxUnservedAfterInstanceLoss = Optional.of(Duration.ofMillis(2L * messageHandlingTimeoutMs));
+        configureClaimHeartbeat(defaultMaxClaimRefreshDuration(this.messageHandlingTimeout.get()));
         addInterceptor(new SingleOperationTransactionDurableQueuesInterceptor(unitOfWorkFactory));
         this.multiTableChangeListener.ifPresent(listener -> listener.addDuplicationFilterAsFirst(new QueueNameDuplicationFilter()));
 
@@ -596,6 +602,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             interceptors.forEach(durableQueuesInterceptor -> durableQueuesInterceptor.setDurableQueues(this));
             sortInterceptorsByOrder(interceptors);
 
+            // Before any consumer can claim a message
+            claimHeartbeat.start();
+
             if (useCentralizedMessageFetcher) {
                 // Start the centralized message fetcher first
                 centralizedMessageFetcher.start();
@@ -739,6 +748,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                 // resumes it
                 multiTableChangeListener.get().stop();
             }
+            // After the consumers: a handler still finishing is no longer refreshed, and the reset takes its message
+            // back once the claim is older than the message-handling-timeout
+            claimHeartbeat.stop();
             started = false;
             log.info("Stopped");
         }
@@ -793,12 +805,81 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
-     * The {@code messageHandlingTimeout}: once a claim is that old, a stuck-message reset may take the message back and
-     * deliver it again while its first handler still runs.
+     * How long a handler may run before its message may be taken back as stuck and delivered again beside it.
+     * <p>
+     * A claim is taken back by the stuck-message reset once its {@code delivery_ts} is older than the configured
+     * {@code messageHandlingTimeout} ({@link PostgresqlDurableQueuesBuilder#setMessageHandlingTimeout(Duration)}). While a
+     * handler runs on a live instance, that instance refreshes its claim (a claim heartbeat every third of the timeout,
+     * written only for handlers that have run that long), so the message is not taken back - for up to
+     * {@link PostgresqlDurableQueuesBuilder#setMaxClaimRefreshDuration(Duration)} (default ten times the timeout). After
+     * that the claim is no longer refreshed and a WARN is logged, so a hung handler's message is still recovered.
+     * The value returned is therefore the larger of the timeout and that maximum; with the heartbeat disabled
+     * ({@link Duration#ZERO}) it is the timeout.
+     * <p>
+     * A message claimed by an instance that dies is not refreshed, and is taken back after the timeout - see
+     * {@link #maxUnservedAfterInstanceLoss()}.
      */
     @Override
     public Optional<Duration> messageHandlingTimeout() {
         return messageHandlingTimeout;
+    }
+
+    /**
+     * The default of {@link PostgresqlDurableQueuesBuilder#setMaxClaimRefreshDuration(Duration)}: how many
+     * {@code messageHandlingTimeout}s a running handler's claim is kept alive by the claim heartbeat
+     */
+    public static final int DEFAULT_MAX_CLAIM_REFRESH_TIMEOUT_MULTIPLIER = 10;
+
+    static Duration defaultMaxClaimRefreshDuration(Duration messageHandlingTimeout) {
+        return messageHandlingTimeout.multipliedBy(DEFAULT_MAX_CLAIM_REFRESH_TIMEOUT_MULTIPLIER);
+    }
+
+    /**
+     * Set by the {@link PostgresqlDurableQueuesBuilder} - see {@link PostgresqlDurableQueuesBuilder#setMaxClaimRefreshDuration(Duration)}.
+     * Must be called before {@link #start()}
+     *
+     * @param maxClaimRefreshDuration how long a running handler's claim is refreshed; {@link Duration#ZERO} disables the heartbeat
+     */
+    synchronized void configureClaimHeartbeat(Duration maxClaimRefreshDuration) {
+        requireNonNull(maxClaimRefreshDuration, "No maxClaimRefreshDuration provided");
+        requireFalse(maxClaimRefreshDuration.isNegative(), "maxClaimRefreshDuration must not be negative");
+        requireFalse(started, "The claim heartbeat cannot be configured while PostgresqlDurableQueues is started");
+        var timeout  = Duration.ofMillis(messageHandlingTimeoutMs);
+        var interval = Duration.ofMillis(Math.max(1, messageHandlingTimeoutMs / 3));
+        claimHeartbeat = new ClaimHeartbeat(interval,
+                                            maxClaimRefreshDuration,
+                                            this::refreshClaims,
+                                            System::nanoTime,
+                                            Instant::now,
+                                            "DurableQueues-" + sharedQueueTableName + "-ClaimHeartbeat");
+        messageHandlingTimeout = Optional.of(maxClaimRefreshDuration.compareTo(timeout) > 0 ? maxClaimRefreshDuration : timeout);
+    }
+
+    /**
+     * For tests: the claim heartbeat
+     */
+    ClaimHeartbeat claimHeartbeat() {
+        return claimHeartbeat;
+    }
+
+    /**
+     * The {@link ClaimHeartbeat.Refresher}: one fenced UPDATE for every due claim, in its own unit of work
+     */
+    private Set<QueueEntryId> refreshClaims(Map<QueueEntryId, Instant> claims, Instant now) {
+        var ids                = new ArrayList<String>(claims.size());
+        var deliveryTimestamps = new ArrayList<String>(claims.size());
+        claims.forEach((id, deliveryTs) -> {
+            ids.add(id.toString());
+            deliveryTimestamps.add(deliveryTs.toString());
+        });
+        return unitOfWorkFactory.withUnitOfWork(unitOfWork -> unitOfWork.handle()
+                                                                        .createQuery(durableQueuesSql.getRefreshClaimsSql())
+                                                                        .bind("now", now)
+                                                                        .bindArray("ids", String.class, ids)
+                                                                        .bindArray("deliveryTimestamps", String.class, deliveryTimestamps)
+                                                                        .mapTo(String.class)
+                                                                        .map(QueueEntryId::of)
+                                                                        .collect(Collectors.toSet()));
     }
 
     /**
@@ -1185,6 +1266,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     public Optional<QueuedMessage> retryMessage(RetryMessage operation) {
         requireNonNull(operation, "You must provide a RetryMessage instance");
         operation.validate();
+        claimHeartbeat.release(operation.queueEntryId);
         return newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
@@ -1211,6 +1293,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     public Optional<QueuedMessage> releaseUndeliveredMessage(ReleaseUndeliveredMessage operation) {
         requireNonNull(operation, "You must provide a ReleaseUndeliveredMessage instance");
         operation.validate();
+        claimHeartbeat.release(operation.queueEntryId);
         return newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
@@ -1238,6 +1321,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     public Optional<QueuedMessage> markAsDeadLetterMessage(MarkAsDeadLetterMessage operation) {
         requireNonNull(operation, "You must provide a MarkAsDeadLetterMessage instance");
         operation.validate();
+        claimHeartbeat.release(operation.queueEntryId);
         return newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
@@ -1261,6 +1345,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     public boolean markAsDeadLetterMessageDirect(MarkAsDeadLetterMessageDirect operation) {
         requireNonNull(operation, "You must provide a MarkAsDeadLetterMessageDirect instance");
         operation.validate();
+        claimHeartbeat.release(operation.queueEntryId);
         return newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
@@ -1317,6 +1402,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     @Override
     public boolean acknowledgeMessageAsHandled(AcknowledgeMessageAsHandled operation) {
         requireNonNull(operation, "You must provide a AcknowledgeMessageAsHandled instance");
+        claimHeartbeat.release(operation.queueEntryId);
 
         return unitOfWorkFactory.withUnitOfWork(() -> newInterceptorChainForOperation(operation,
                                                                                       interceptors,
@@ -1345,6 +1431,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     @Override
     public boolean deleteMessage(DeleteMessage operation) {
         requireNonNull(operation, "You must provide a DeleteMessage instance");
+        claimHeartbeat.release(operation.queueEntryId);
 
         return newInterceptorChainForOperation(operation,
                                                interceptors,
@@ -1368,7 +1455,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         requireNonNull(operation, "You must provide a GetNextMessageReadyForDelivery instance");
         log.trace("[{}] Entered GetNextMessageReadyForDelivery", operation.queueName);
 
-        return newInterceptorChainForOperation(operation,
+        Optional<QueuedMessage> claimed = newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptors, interceptorChain) -> interceptors.intercept(operation, interceptorChain),
                                                () -> {
@@ -1390,6 +1477,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                        return Optional.<QueuedMessage>empty();
                                                    }
                                                }).proceed();
+        claimHeartbeat.track(claimed);
+        return claimed;
     }
 
     private Optional<QueuedMessage> fetchNextMessageReadyForDeliveryOrderedUnordered(QueueName queueName, Collection<String> excludes, Instant now) {
@@ -1449,8 +1538,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                        .bind("now", now)
                                                        .execute();
                 if (numberOfChanges > 0) {
-                    // INFO: either a consumer died with these in hand (normal recovery), or a handler outlasted the timeout
-                    // and is now running beside a second delivery - the consumer's own WARN says which
+                    // INFO: either a consumer died with these in hand (normal recovery), or a handler outlasted the max claim
+                    // refresh duration and is now running beside a second delivery - the claim heartbeat's WARN says which
                     log.info("[{}] Took back {} message(s) whose delivery was older than the message-handling-timeout ({} ms) " +
                                      "and redelivered them", queueName, numberOfChanges, messageHandlingTimeoutMs);
                 } else {
@@ -1671,7 +1760,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         }
 
         try {
-            return unitOfWorkFactory.withUnitOfWork(uow -> {
+            var claimedBatch = unitOfWorkFactory.withUnitOfWork(uow -> {
                 resetMessagesStuckBeingDeliveredAcrossMultipleQueues(queueNames);
 
                 // One claim time for every queue in this poll - the optimizers are told it, so they only treat
@@ -1757,6 +1846,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                           allMessages.size(), queueNames.size(), queueNames);
                 return allMessages;
             });
+            claimHeartbeat.track(claimedBatch);
+            return claimedBatch;
         } catch (Exception e) {
             if (IOExceptionUtil.isIOException(e)) {
                 log.debug("Error in fetchNextBatchOfMessages: {}", e.getMessage(), e);
@@ -1798,7 +1889,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         }
 
         try {
-            return unitOfWorkFactory.withUnitOfWork(uow -> {
+            var claimedBatch = unitOfWorkFactory.withUnitOfWork(uow -> {
                 resetMessagesStuckBeingDeliveredAcrossMultipleQueues(activeQueues);
 
                 var now              = Instant.now();
@@ -1872,6 +1963,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
                 return messages;
             });
+            claimHeartbeat.track(claimedBatch);
+            return claimedBatch;
         } catch (Exception e) {
             if (IOExceptionUtil.isIOException(e)) {
                 log.debug("Error in fetchNextBatchOfMessages: {}", e.getMessage(), e);

@@ -99,7 +99,8 @@ Created via `PostgresqlDurableQueues.builder()`.
 | `unitOfWorkFactory` | `HandleAwareUnitOfWorkFactory` | **Required** | JDBI transaction factory |
 | `jsonSerializer` | `JSONSerializer` | Jackson | Message serialization |
 | `sharedQueueTableName` | `String` | `durable_queues` | ⚠️ SQL injection risk - validate! |
-| `messageHandlingTimeout` | `Duration` | 30s | Stuck message timeout |
+| `messageHandlingTimeout` | `Duration` | 30s | Stuck message timeout: a claim older than this is taken back. A live instance refreshes its running handlers' claims (claim heartbeat, every timeout/3, one batched UPDATE, only for handlers in flight that long), so only a dead instance's or a capped handler's claim ages out |
+| `maxClaimRefreshDuration` | `Duration` | 10 × `messageHandlingTimeout` | How long the claim heartbeat keeps a running handler's claim alive; past it a WARN is logged and the message can be redelivered beside the handler. `Duration.ZERO` = no heartbeat. `messageHandlingTimeout()` returns max(timeout, this) |
 | `useCentralizedMessageFetcher` | `boolean` | `true` | Centralized vs per-consumer |
 | `centralizedMessageFetcherPollingInterval` | `Duration` | 20ms | Polling interval |
 | `queuePollingOptimizerFactory` | `Function<ConsumeFromQueue,QueuePollingOptimizer>` | null | For `DefaultDurableQueueConsumer` |

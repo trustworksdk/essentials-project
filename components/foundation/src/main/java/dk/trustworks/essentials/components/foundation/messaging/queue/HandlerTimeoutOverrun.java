@@ -26,10 +26,11 @@ import java.util.concurrent.atomic.*;
 
 /**
  * Notices a handler that ran longer than its queue gives a delivery before it takes the message back as stuck
- * ({@link DurableQueues#messageHandlingTimeout()}: {@code message-handling-timeout} on {@code PostgresqlDurableQueues}
- * and MongoDB - not {@link DurableQueues#maxUnservedAfterInstanceLoss()}, which adds the reset cadence and would warn
- * late). Past that point the queue may already have delivered the message a second time, so two attempts ran
- * at once - for an {@link OrderedMessage}, the same key in two handlers.
+ * ({@link DurableQueues#messageHandlingTimeout()}: {@code message-handling-timeout} on MongoDB; on
+ * {@code PostgresqlDurableQueues}, whose claim heartbeat keeps a running handler's claim alive, the larger of that and its
+ * max claim refresh duration - not {@link DurableQueues#maxUnservedAfterInstanceLoss()}, which adds the reset cadence
+ * and would warn late). Past that point the queue may already have delivered the message a second time, so two attempts
+ * ran at once - for an {@link OrderedMessage}, the same key in two handlers.
  * <p>
  * Counted every time and logged at most once a minute per queue: a handler that is slow is usually slow every time, and
  * a WARN per message would bury the one line that matters. The shard-owned engine has its own (its lease, not a
@@ -60,10 +61,11 @@ final class HandlerTimeoutOverrun {
         var next = nextWarningNanos.get();
         if (now - next >= 0 && nextWarningNanos.compareAndSet(next, now + WARN_EVERY_NANOS)) {
             log.warn("[{}] A message handler ran {} ms, longer than the {} ms the queue gives a delivery " +
-                             "(message-handling-timeout). The queue may already have taken the message back as stuck and " +
+                             "(message-handling-timeout; on PostgresqlDurableQueues the max claim refresh duration, when larger). " +
+                             "The queue may already have taken the message back as stuck and " +
                              "delivered it again, so two attempts ran at once - for an ordered message, the same key in two " +
-                             "handlers. Make the handler shorter (time out its blocking calls well inside the timeout) or raise " +
-                             "the timeout. {} handler(s) on this queue have outlasted it so far; this is logged at most once a minute",
+                             "handlers. Make the handler shorter (time out its blocking calls well inside that limit) or raise " +
+                             "the limit. {} handler(s) on this queue have outlasted it so far; this is logged at most once a minute",
                      queueName, TimeUnit.NANOSECONDS.toMillis(elapsed), timeout.get().toMillis(), overruns.sum());
         }
     }

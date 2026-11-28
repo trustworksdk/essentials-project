@@ -125,7 +125,9 @@ abstract class SingleOperationTransactionPostgresqlDurableQueuesIT extends Durab
         // Confirm the message is marked as being handled
         assertThat(durableQueues.getNextMessageReadyForDelivery(queueName)).isEmpty();
 
-        // When
+        // When the instance holding the claim is gone: a live instance's claim heartbeat would keep it alive, so stop
+        // refreshing it, as a dead instance would
+        durableQueues.claimHeartbeat().release(nextMessage.get().getId());
         Thread.sleep(5500);
         // Confirm the message can be acquired again as it has timed out
         var redeliveredMessage = durableQueues.getNextMessageReadyForDelivery(queueName);

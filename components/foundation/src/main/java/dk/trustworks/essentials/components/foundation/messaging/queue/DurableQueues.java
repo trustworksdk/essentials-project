@@ -317,7 +317,9 @@ public interface DurableQueues extends Lifecycle {
     /**
      * How long a delivery may run before the implementation may take its message back as stuck and deliver it again,
      * while the first handler may still be running: the message-handling timeout of an implementation that resets
-     * stuck deliveries by age. The consumers WARN about a handler that ran longer ({@code HandlerTimeoutOverrun}).
+     * stuck deliveries by age - or, for one that keeps a running handler's claim alive (the claim heartbeat of
+     * {@code PostgresqlDurableQueues}), how long it does so. The consumers WARN about a handler that ran longer
+     * ({@code HandlerTimeoutOverrun}).
      * <p>
      * Shorter than {@link #maxUnservedAfterInstanceLoss()} when the implementation only looks for stuck deliveries on a
      * cadence: a delivery can be taken back as soon as it is this old, but may stay unserved for longer.

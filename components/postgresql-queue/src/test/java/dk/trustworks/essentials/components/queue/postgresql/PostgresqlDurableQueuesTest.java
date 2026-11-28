@@ -54,7 +54,8 @@ class PostgresqlDurableQueuesTest {
     /**
      * The stuck-message reset takes back claims at least one timeout old and runs at most once per timeout, so a claim
      * made just after a reset is taken back by the one after the next: up to two timeouts unserved. A handler may
-     * still be overrun after one timeout.
+     * still be overrun after one timeout - unless its instance's claim heartbeat keeps refreshing the claim, which by
+     * default it does for ten timeouts, so that is how long a handler may run before it can be overrun.
      */
     @Test
     void a_dead_consumers_message_stays_unserved_for_up_to_two_message_handling_timeouts() {
@@ -64,6 +65,29 @@ class PostgresqlDurableQueuesTest {
                                                         .setMessageHandlingTimeout(Duration.ofSeconds(30))
                                                         .build()) {
             assertThat(durableQueues.maxUnservedAfterInstanceLoss()).contains(Duration.ofSeconds(60));
+            assertThat(durableQueues.messageHandlingTimeout()).contains(Duration.ofSeconds(300));
+        }
+    }
+
+    @Test
+    void the_claim_heartbeat_runs_every_third_of_the_timeout_and_its_maximum_is_configurable() {
+        try (var durableQueues = PostgresqlDurableQueues.builder()
+                                                        .setUnitOfWorkFactory(mock(HandleAwareUnitOfWorkFactory.class))
+                                                        .setJsonSerializer(mock(JSONSerializer.class))
+                                                        .setMessageHandlingTimeout(Duration.ofSeconds(30))
+                                                        .setMaxClaimRefreshDuration(Duration.ofSeconds(90))
+                                                        .build()) {
+            assertThat(durableQueues.claimHeartbeat().interval()).isEqualTo(Duration.ofSeconds(10));
+            assertThat(durableQueues.claimHeartbeat().maxRefreshDuration()).isEqualTo(Duration.ofSeconds(90));
+            assertThat(durableQueues.messageHandlingTimeout()).contains(Duration.ofSeconds(90));
+        }
+        try (var durableQueues = PostgresqlDurableQueues.builder()
+                                                        .setUnitOfWorkFactory(mock(HandleAwareUnitOfWorkFactory.class))
+                                                        .setJsonSerializer(mock(JSONSerializer.class))
+                                                        .setMessageHandlingTimeout(Duration.ofSeconds(30))
+                                                        .setMaxClaimRefreshDuration(Duration.ZERO)
+                                                        .build()) {
+            assertThat(durableQueues.claimHeartbeat().isEnabled()).isFalse();
             assertThat(durableQueues.messageHandlingTimeout()).contains(Duration.ofSeconds(30));
         }
     }
